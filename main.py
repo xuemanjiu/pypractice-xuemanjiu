@@ -1,8 +1,6 @@
 import os
 import random
 import time
-import subprocess
-import shutil
 import multiprocessing
 import numpy as np
 import pandas as pd
@@ -11,15 +9,16 @@ import matplotlib
 if not os.environ.get('DISPLAY', ''):
     matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from PIL import Image
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 from torchvision import transforms
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
+from banknote_classifier.models import VGG16
+from banknote_classifier.dataset import download_dataset, get_img_info, CustomDataset, CustomTestDataset
 
 # ==========================================
 # CONFIGURATION & HYPERPARAMETERS
@@ -45,158 +44,7 @@ def set_seed(seed):
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
 
-# ==========================================
-# DATASET UTILITIES
-# ==========================================
-def download_dataset(data_path):
-    dataset_dir = os.path.join(data_path, "bangla")
-    if not os.path.exists(data_path) or not os.path.exists(dataset_dir):
-        print("Dataset not found. Downloading Bangla-Money-Dataset from GitHub...")
-        os.makedirs(data_path, exist_ok=True)
-        subprocess.run([
-            "git", "clone", "--depth", "1",
-            "https://github.com/nsojib/Bangla-Money-Dataset.git",
-            dataset_dir
-        ], check=True)
-        # Remove git tracking to avoid nested git repository issues
-        git_dir = os.path.join(dataset_dir, ".git")
-        if os.path.exists(git_dir):
-            shutil.rmtree(git_dir)
-        print("Dataset downloaded successfully!")
-    else:
-        print("Dataset already exists.")
 
-def get_img_info(data_dir, label_mapping):
-    imgpath = []
-    imglabel = []
-    for root, dirs, _ in os.walk(data_dir):
-        for sub_dir in dirs:
-            if sub_dir in label_mapping:
-                sub_dir_path = os.path.join(root, sub_dir)
-                img_names = os.listdir(sub_dir_path)
-                img_names = [f for f in img_names if f.endswith('.jpg')]
-                for img_name in img_names:
-                    imgpath.append(os.path.join(sub_dir_path, img_name))
-                    imglabel.append(label_mapping[sub_dir])
-    return imgpath, imglabel
-
-class CustomDataset(Dataset):
-    def __init__(self, img_paths, labels, transform=None):
-        self.img_paths = img_paths
-        self.labels = labels
-        self.transform = transform
-
-    def __getitem__(self, index):
-        img = Image.open(self.img_paths[index]).convert('RGB')
-        label = self.labels[index]
-        if self.transform:
-            img = self.transform(img)
-        return img, label
-
-    def __len__(self):
-        return len(self.img_paths)
-
-class CustomTestDataset(Dataset):
-    def __init__(self, img_paths, transform=None):
-        self.img_paths = img_paths
-        self.transform = transform
-
-    def __getitem__(self, index):
-        img = Image.open(self.img_paths[index]).convert('RGB')
-        if self.transform:
-            img = self.transform(img)
-        return img
-
-    def __len__(self):
-        return len(self.img_paths)
-
-def denormalize_image(tensor):
-    # Denormalize image using standard ImageNet mean and std
-    mean = np.array([0.485, 0.456, 0.406])
-    std = np.array([0.229, 0.224, 0.225])
-    img = tensor.cpu().numpy().transpose((1, 2, 0))
-    img = std * img + mean
-    img = np.clip(img, 0, 1)
-    return img
-
-# ==========================================
-# MODEL DEFINITION (VGG-16)
-# ==========================================
-class VGG16(nn.Module):
-    def __init__(self, num_classes=Config.NUM_CLASSES):
-        super(VGG16, self).__init__()
-
-        self.conv_block = nn.Sequential(
-            # Block 1
-            nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-
-            # Block 2
-            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-
-            # Block 3
-            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-
-            # Block 4
-            nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-
-            # Block 5
-            nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(512),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-        )
-
-        self.feat_classifier = nn.Sequential(
-            nn.Linear(7 * 7 * 512, 4096),
-            nn.ReLU(inplace=True),
-            nn.Dropout(p=0.5),
-            nn.Linear(4096, 4096),
-            nn.ReLU(inplace=True),
-            nn.Dropout(p=0.5),
-            nn.Linear(4096, num_classes)
-        )
-
-    def forward(self, x):
-        x = self.conv_block(x)
-        x = torch.flatten(x, 1)
-        x = self.feat_classifier(x)
-        return x
 
 # ==========================================
 # TRAINING & VALIDATION PIPELINE
